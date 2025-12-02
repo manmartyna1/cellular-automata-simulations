@@ -1,0 +1,163 @@
+# ==========================================
+# IMAGE PROCESSING TOOLKIT (Python + Pillow)
+# ==========================================
+# Funkcje:
+# 1) Konwersja do skali szarości – 2 metody
+# 2) Ściemnienie obrazu o X%
+# 3) Rozjaśnianie seryjne o X% (10–20)
+# 4) Binaryzacja z progiem 50%
+# 5) Binaryzacja z progiem podanym przez użytkownika
+# ==========================================
+
+#from PIL import Image
+import numpy as np
+import os
+import matplotlib.image as mpimg
+import matplotlib.pyplot as plt
+
+# 🔧 Konfiguracja
+INPUT_PATH = "Pan_zywiec_zdroj_wynalazca_wody.png"  # <- Twój plik PNG
+OUT_DIR = "out_images"
+os.makedirs(OUT_DIR, exist_ok=True)
+
+
+# ==========================================
+# Pomocnicze funkcje
+# ==========================================
+def load_image(path):
+    img = mpimg.imread(path)
+    if img.dtype != np.uint8:
+        img = (np.clip(img, 0, 1) * 255).astype(np.uint8)
+    if img.ndim == 2:  # grayscale -> pseudo-RGB
+        img = np.stack([img, img, img, np.full_like(img, 255)], axis=-1)
+    elif img.shape[2] == 3:  # RGB -> dołóż alfę 255
+        a = np.full((img.shape[0], img.shape[1], 1), 255, dtype=np.uint8)
+        img = np.concatenate([img, a], axis=2)
+    return img  # ndarray RGBA
+
+def save_image(arr, name):
+    path = os.path.join(OUT_DIR, name)
+    arr = np.clip(arr, 0, 255).astype(np.uint8)
+    if arr.shape[2] == 4:   # odrzuć alfę (kanał 4)
+        arr = arr[:, :, :3]
+    plt.imsave(path, arr)
+    print(f"Zapisano: {path}")
+
+def to_numpy(img):
+    return np.array(img).astype(np.float32)
+
+def from_numpy(arr, mode="RGBA"):
+    arr = np.clip(arr, 0, 255).astype(np.uint8)
+    return arr  # zwracamy tablicę numpy, bez Image.fromarray()
+
+# ==========================================
+# 1) SKALA SZAROŚCI — 2 podejścia
+# ==========================================
+def grayscale_average(img):
+    arr = to_numpy(img)
+    alpha = arr[..., 3:] if arr.shape[2] == 4 else None
+    gray = arr[..., :3].mean(axis=2, keepdims=True)
+    out = np.concatenate([gray, gray, gray], axis=2)
+    if alpha is not None:
+        out = np.concatenate([out, alpha], axis=2)
+    return from_numpy(out)
+
+def grayscale_luminance(img):
+    arr = to_numpy(img)
+    alpha = arr[..., 3:] if arr.shape[2] == 4 else None
+    lum = (0.299 * arr[..., 0] + 0.587 * arr[..., 1] + 0.114 * arr[..., 2])[..., None]
+    out = np.concatenate([lum, lum, lum], axis=2)
+    if alpha is not None:
+        out = np.concatenate([out, alpha], axis=2)
+    return from_numpy(out)
+
+
+# ==========================================
+# 2) ŚCIEMNIENIE OBRAZU
+# ==========================================
+def darken(img, percent):
+    if not (1 <= percent <= 99):
+        raise ValueError("Procent musi być w zakresie 1–99")
+    factor = 1.0 - percent / 100.0
+    arr = to_numpy(img)
+    arr[..., :3] *= factor
+    return from_numpy(arr)
+
+
+# ==========================================
+# 3) ROZJAŚNIENIE SERYJNE
+# ==========================================
+def brighten_series_range(img, start=10, end=20):
+    if not (10 <= start <= end <= 20):
+        raise ValueError("Zakres musi być w przedziale 10..20")
+    base = to_numpy(img).astype(np.float32)   # ORYGINAŁ
+    results = []
+    for p in range(start, end + 1):
+        out = base.copy()
+        out[..., :3] = np.clip(out[..., :3] * (1 + p/100.0), 0, 255)
+        results.append((p, from_numpy(out)))
+    return results
+
+
+
+# ==========================================
+# 4) BINARYZACJA — STAŁY PRÓG 50%
+# ==========================================
+def binarize_fixed50(img):
+    arr = to_numpy(img)
+    lum = (0.299 * arr[..., 0] + 0.587 * arr[..., 1] + 0.114 * arr[..., 2]) / 255.0
+    mask = lum >= 0.5
+    out = np.zeros_like(arr)
+    out[..., :3] = mask[..., None] * 255
+    out[..., 3] = arr[..., 3]
+    return from_numpy(out)
+
+
+# ==========================================
+# 5) BINARYZACJA — PRÓG Z WEJŚCIA
+# ==========================================
+def binarize_with_input(img, threshold_percent):
+    threshold = np.clip(threshold_percent / 100.0, 0, 1)
+    arr = to_numpy(img)
+    lum = (0.299 * arr[..., 0] + 0.587 * arr[..., 1] + 0.114 * arr[..., 2]) / 255.0
+    mask = lum >= threshold
+    out = np.zeros_like(arr)
+    out[..., :3] = mask[..., None] * 255
+    out[..., 3] = arr[..., 3]
+    return from_numpy(out)
+
+
+# ==========================================
+# GŁÓWNY PROGRAM
+# ==========================================
+if __name__ == "__main__":
+    img = load_image(INPUT_PATH)
+
+    print("=== PUNKT 1 === Konwersja do skali szarości")
+    save_image(grayscale_average(img), "gray_average.png")
+    save_image(grayscale_luminance(img), "gray_luminance.png")
+
+    print("\n=== PUNKT 2 === Ściemnienie obrazu")
+    try:
+        dark_val = float(input("Podaj wartość ściemnienia (1–99%): "))
+        save_image(darken(img, dark_val), f"darkened_{int(dark_val)}.png")
+    except ValueError:
+        print("Niepoprawna wartość — pomijam ściemnianie.")
+
+    print("\n=== PUNKT 3 === Rozjaśnienie seryjne")
+    try:
+        results = brighten_series_range(img, 10, 20)
+        for p, out_img in results:
+            save_image(out_img, f"bright_{p:02d}.png")
+    except Exception as e:
+        print("Błąd podczas rozjaśniania:", e)
+
+    print("\n=== PUNKT 4 === Binaryzacja z progiem 50%")
+    save_image(binarize_fixed50(img), "binary_50.png")
+
+    print("\n=== PUNKT 5 === Binaryzacja z progiem podanym przez użytkownika")
+    try:
+        user_thresh = float(input("Podaj próg (0–100): "))
+        save_image(binarize_with_input(img, user_thresh), f"binary_{int(user_thresh)}.png")
+    except ValueError:
+        print("Niepoprawna wartość — pomijam.")
